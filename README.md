@@ -191,20 +191,62 @@ Once assets are discovered, promote them to managed assets and route their data 
 
 After a few minutes, the asset appears on the **Assets** page as a managed `Microsoft.DeviceRegistry/assets` resource. Messages published to the source topic are now copied to the unified namespace destination topic by the connector.
 
-#### Create a dataflow
+#### Create a dataflow to Microsoft Fabric Real-Time Intelligence
 
-Dataflows route telemetry from managed assets to cloud endpoints such as Event Hubs, Azure Data Lake, or Microsoft Fabric.
+This section walks through creating a dataflow that routes telemetry from the MQTT broker to [Microsoft Fabric Real-Time Intelligence](https://learn.microsoft.com/en-us/azure/iot-operations/connect-to-cloud/howto-configure-fabric-real-time-intelligence) using the IoT Operations system-assigned managed identity (Entra ID). This avoids managing secrets — the platform authenticates directly via its managed identity.
+
+##### Prerequisites in Fabric
+
+1. [Create a Fabric workspace](https://learn.microsoft.com/en-us/fabric/get-started/create-workspaces) — the default *my workspace* is not supported
+2. Ensure your **Tenant Admin** has enabled **Service principals can call Fabric public APIs** in the Admin portal
+3. [Create an event stream](https://learn.microsoft.com/en-us/fabric/real-time-intelligence/event-streams/create-manage-an-eventstream#create-an-eventstream)
+4. [Add a custom endpoint as a source](https://learn.microsoft.com/en-us/fabric/real-time-intelligence/event-streams/add-source-custom-app#add-custom-endpoint-data-as-a-source)
+
+##### Get the Fabric connection details
+
+1. In the Fabric portal, go to your event stream's **Sources** section
+2. Select the custom endpoint and choose **Entra ID Authentication**
+3. Copy the **Event hub namespace** (e.g. `xxxx.servicebus.windows.net:9093`) and **Event hub** name (the topic, e.g. `es_aaaaaaaa-0000-1111-2222-bbbbbbbbbbbb`)
+
+See [Connect to Eventstream using Microsoft Entra ID authentication](https://learn.microsoft.com/en-us/fabric/real-time-intelligence/event-streams/custom-endpoint-entra-id-auth) for details.
+
+##### Add the IoT Operations managed identity to the Fabric workspace
+
+The IoT Operations Arc extension has a system-assigned managed identity (service principal). You must add it as a **Contributor** (or higher) to your Fabric workspace so it can send data to the custom endpoint.
+
+1. In the **Azure portal**, go to your IoT Operations instance → **Overview**
+2. Copy the name of the extension listed after **Azure IoT Operations Arc extension** (e.g. `azure-iot-operations-xxxx7`)
+3. In the **Fabric portal**, go to your workspace → **Manage access**
+4. Search for the IoT Operations Arc extension name you copied
+5. Assign the **Contributor** role and select **Add**
+
+##### Create the data flow endpoint
+
+1. In the [Operations Experience UI](https://iotoperations.azure.com), go to **Data flow endpoints** → **Create new data flow endpoint** → **Microsoft Fabric Real-Time Intelligence** → **New**
+2. Enter a **Name** (e.g. `fabric-rti-endpoint`)
+3. Set **Host** to the Event hub namespace from Fabric (e.g. `xxxx.servicebus.windows.net:9093`)
+4. Set **Authentication method** to **System assigned managed identity**
+5. Select **Apply**
+
+##### Create the dataflow
 
 1. In the Operations Experience UI, go to **Dataflows** → **Create dataflow**
-2. Configure the **source** — select the MQTT broker topic (e.g. `unified/contoso/redmond/building40/line1/factory-sensor-01/telemetry`)
-3. Configure the **destination** — choose a cloud endpoint:
-   - **Event Hubs** — for stream processing and real-time analytics
-   - **Azure Data Lake / Fabric** — for batch analytics and storage
-   - **Azure Data Explorer** — for time-series queries
-4. Optionally add **transformations** to filter, enrich, or reshape the data
+2. Configure the **source** — use `unified/contoso/#` as the MQTT broker topic to capture all Contoso messages forwarded by the MQTT connector to the unified namespace
+3. Configure the **destination**:
+   - Select the Fabric RTI endpoint you created (e.g. `fabric-rti-endpoint`)
+   - Set the **Topic** to the Event hub name from Fabric (e.g. `es_aaaaaaaa-0000-1111-2222-bbbbbbbbbbbb`)
+4. Add a **transformation** to include the MQTT topic in the output payload:
+   - Under **Transform (optional)**, select **Compute** → **Add**
+   - Set **Formula** to `@$metadata.topic`
+   - Set **Output** to `mqtt_topic`
+   - Select **Apply**
 5. Select **Create** to deploy the dataflow
 
-See [Create a dataflow](https://learn.microsoft.com/en-us/azure/iot-operations/connect-to-cloud/howto-create-dataflow) for details.
+> **Note:** Dataflow MQTT sources support the multi-level `#` wildcard, unlike the MQTT connector topic filter which only supports single-level `+`. You can narrow the source to a specific subtree such as `unified/contoso/redmond/building40/#` or a single asset topic like `unified/contoso/redmond/building40/line1/factory-sensor-01/telemetry`.
+
+Data should begin flowing into your Fabric event stream within a few minutes. You can verify in Fabric by checking the event stream's data preview.
+
+See [Create a dataflow](https://learn.microsoft.com/en-us/azure/iot-operations/connect-to-cloud/howto-create-dataflow) for details on other endpoint types (Event Hubs, Azure Data Lake, Azure Data Explorer).
 
 #### Discover additional assets
 
@@ -233,3 +275,5 @@ az group delete --name iotops<suffix>rg --yes --no-wait
 - [Configure MQTT broker listeners](https://learn.microsoft.com/en-us/azure/iot-operations/manage-mqtt-broker/howto-configure-brokerlistener)
 - [Configure the connector for MQTT](https://learn.microsoft.com/en-us/azure/iot-operations/discover-manage-assets/howto-use-mqtt-connector)
 - [Create a dataflow](https://learn.microsoft.com/en-us/azure/iot-operations/connect-to-cloud/howto-create-dataflow)
+- [Configure data flow endpoints for Microsoft Fabric Real-Time Intelligence](https://learn.microsoft.com/en-us/azure/iot-operations/connect-to-cloud/howto-configure-fabric-real-time-intelligence)
+- [Connect to Eventstream using Microsoft Entra ID authentication](https://learn.microsoft.com/en-us/fabric/real-time-intelligence/event-streams/custom-endpoint-entra-id-auth)
