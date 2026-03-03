@@ -18,7 +18,7 @@ location="eastus2"
 
 # Unique suffix appended to all resource names to avoid naming collisions.
 # Change this to a unique value for each new deployment (e.g., "42", "dev01").
-suffix="dev"
+suffix=""
 
 # Azure VM size. Standard_D4s_v5 provides 4 vCPUs and 16 GB RAM,
 # which meets the minimum requirements for IoT Operations.
@@ -48,6 +48,10 @@ schemaRegistryNamespace="iotops${suffix}srn"
 instanceName="iotops${suffix}instance"
 # Azure Device Registry namespace for organizing assets and devices.
 deviceRegistryNamespace="iotops${suffix}ns"
+# Azure Key Vault for secret management (used by dataflow endpoints).
+keyVaultName="iotops${suffix}kv"
+# User-assigned managed identity for the Secret Store extension.
+secretsManagedIdentityName="iotops${suffix}secretsid"
 
 # Ubuntu VM image. Uses the latest Ubuntu 24.04 LTS server image from Canonical.
 ubuntuimage="Canonical:ubuntu-24_04-lts:server:latest"

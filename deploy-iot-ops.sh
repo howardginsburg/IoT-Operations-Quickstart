@@ -10,7 +10,8 @@
 #   3. Creates a schema registry and assigns the required RBAC role.
 #   4. Initializes the cluster for IoT Operations (az iot ops init).
 #   5. Deploys the IoT Operations instance (az iot ops create).
-#   6. Verifies the deployment health (az iot ops check).
+#   6. Enables secret management (Key Vault + secret sync).
+#   7. Verifies the deployment health (az iot ops check).
 #
 # Prerequisites:
 #   - deploy-vm.sh and deploy-kubernetes.sh must have been run successfully.
@@ -283,6 +284,85 @@ echo "Enabling resource sync rules..."
 az iot ops enable-rsync \
     --name "$instanceName" \
     --resource-group "$resourceGroup"
+
+# ---------------------------------------------------------------------------
+# Enable secret management.
+# Dataflow endpoints (e.g., Event Hubs, Fabric) require secrets for
+# authentication. This sets up an Azure Key Vault and the Secret Store
+# extension to sync secrets from the cloud to the edge cluster.
+# Reference: https://learn.microsoft.com/en-us/azure/iot-operations/deploy-iot-ops/howto-enable-secure-settings
+# ---------------------------------------------------------------------------
+
+# Key Vault names only allow lowercase letters, numbers, and hyphens (3-24 chars).
+keyVaultName=$(echo "$keyVaultName" | tr -cd 'a-z0-9-')
+
+echo "Setting up secret management..."
+
+# Create the Key Vault with RBAC authorization.
+if az keyvault show --name "$keyVaultName" --resource-group "$resourceGroup" &>/dev/null; then
+    echo "Key Vault $keyVaultName already exists. Skipping."
+else
+    echo "Creating Key Vault $keyVaultName..."
+    az keyvault create \
+        --name "$keyVaultName" \
+        --resource-group "$resourceGroup" \
+        --location "$location" \
+        --enable-rbac-authorization true
+fi
+
+keyVaultResourceId=$(az keyvault show \
+    --name "$keyVaultName" \
+    --resource-group "$resourceGroup" \
+    --query id --output tsv | tr -d '[:space:]')
+
+# Assign Key Vault Secrets Officer role to the current user so they can
+# create and manage secrets via the Operations Experience UI.
+echo "Ensuring Key Vault Secrets Officer role for current user..."
+currentUserId=$(az ad signed-in-user show --query id --output tsv | tr -d '[:space:]')
+
+existingKvRole=$(az role assignment list \
+    --assignee "$currentUserId" \
+    --role "Key Vault Secrets Officer" \
+    --scope "$keyVaultResourceId" \
+    --query "[].id" --output tsv 2>/dev/null | tr -d '[:space:]')
+
+if [ -n "$existingKvRole" ]; then
+    echo "  Role assignment already exists. Skipping."
+else
+    echo "  Assigning Key Vault Secrets Officer..."
+    az role assignment create \
+        --assignee-object-id "$currentUserId" \
+        --assignee-principal-type User \
+        --role "Key Vault Secrets Officer" \
+        --scope "$keyVaultResourceId"
+fi
+
+# Create a user-assigned managed identity for the Secret Store extension.
+if az identity show --name "$secretsManagedIdentityName" --resource-group "$resourceGroup" &>/dev/null; then
+    echo "Managed identity $secretsManagedIdentityName already exists. Skipping."
+else
+    echo "Creating managed identity $secretsManagedIdentityName..."
+    az identity create \
+        --name "$secretsManagedIdentityName" \
+        --resource-group "$resourceGroup" \
+        --location "$location"
+fi
+
+secretsIdentityResourceId=$(az identity show \
+    --name "$secretsManagedIdentityName" \
+    --resource-group "$resourceGroup" \
+    --query id --output tsv | tr -d '[:space:]')
+
+# Enable secret sync on the IoT Operations instance.
+# This creates federated identity credentials, assigns Key Vault Reader and
+# Key Vault Secrets User roles to the managed identity, and installs the
+# secret provider class on the cluster.
+echo "Enabling secret sync..."
+az iot ops secretsync enable \
+    --instance "$instanceName" \
+    --resource-group "$resourceGroup" \
+    --mi-user-assigned "$secretsIdentityResourceId" \
+    --kv-resource-id "$keyVaultResourceId"
 
 # ---------------------------------------------------------------------------
 # Verify the deployment.
