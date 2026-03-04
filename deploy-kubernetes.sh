@@ -97,7 +97,7 @@ if $SSH_CMD "systemctl is-active k3s" &>/dev/null; then
 else
     echo "Installing K3s..."
     $SSH_CMD "curl -sfL https://get.k3s.io -o /tmp/install_k3s.sh"
-    $SSH_CMD "sudo sh /tmp/install_k3s.sh"
+    $SSH_CMD "sudo sh /tmp/install_k3s.sh --tls-san $publicIp"
 fi
 
 # Verify kubectl is available.
@@ -180,6 +180,8 @@ issuerUrl=$($SSH_CMD "az connectedk8s show \
 
 $SSH_CMD "sudo mkdir -p /etc/rancher/k3s"
 $SSH_CMD "sudo tee /etc/rancher/k3s/config.yaml > /dev/null <<EOF
+tls-san:
+ - $publicIp
 kube-apiserver-arg:
  - service-account-issuer=$issuerUrl
  - service-account-max-token-expiration=24h
@@ -200,7 +202,12 @@ $SSH_CMD "export KUBECONFIG=~/.kube/config && az connectedk8s enable-features \
     --custom-locations-oid $OBJECT_ID \
     --features cluster-connect custom-locations"
 
-# Restart K3s to pick up the service account issuer configuration changes.
+# Delete existing serving certificates so K3s regenerates them with the
+# updated TLS SANs (including the VM's public IP) on restart.
+echo "Removing old K3s serving certificates..."
+$SSH_CMD "sudo rm -f /var/lib/rancher/k3s/server/tls/serving-kube-apiserver.crt /var/lib/rancher/k3s/server/tls/serving-kube-apiserver.key"
+
+# Restart K3s to pick up the service account issuer and TLS SAN changes.
 echo "Restarting K3s..."
 $SSH_CMD "sudo systemctl restart k3s"
 
@@ -219,6 +226,22 @@ $SSH_CMD "chmod 0600 ~/.kube/config"
 echo "Verifying cluster status..."
 $SSH_CMD "kubectl get nodes"
 
+# ---------------------------------------------------------------------------
+# Copy the kubeconfig to the local machine.
+# This allows running kubectl commands locally against the remote K3s cluster.
+# The server address is updated from 127.0.0.1 to the VM's public IP so the
+# local kubectl can reach the API server over the network.
+# ---------------------------------------------------------------------------
+echo "Copying kubeconfig to local machine..."
+mkdir -p ~/.kube
+SCP_CMD="sshpass -p $password scp -o StrictHostKeyChecking=no"
+$SCP_CMD "$user@$publicIp:~/.kube/config" ~/.kube/config
+# Replace the loopback address with the VM's public IP in the local kubeconfig.
+sed -i "s|https://127.0.0.1:6443|https://$publicIp:6443|g" ~/.kube/config
+
+echo "Verifying local kubectl access..."
+kubectl get nodes
+
 echo ""
 echo "================================================="
 echo "K3s Installation Complete!"
@@ -226,4 +249,5 @@ echo "================================================="
 echo "Cluster Name:   $clusterName"
 echo "VM Name:        $vmName"
 echo "OIDC Issuer:    $issuerUrl"
+echo "Local kubectl:  configured (~/.kube/config)"
 echo "================================================="

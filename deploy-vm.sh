@@ -113,6 +113,20 @@ az network nsg rule create \
     --destination-port-ranges 1883 \
     --source-address-prefixes "$callerIp"
 
+# Allow K3s API server (port 6443) inbound from the deployer's IP so
+# kubectl can be used from the local machine against the remote cluster.
+echo "Allowing K3s API (6443) from $callerIp..."
+az network nsg rule create \
+    --resource-group "$resourceGroup" \
+    --nsg-name "$nsgName" \
+    --name AllowK3sAPI \
+    --priority 120 \
+    --direction Inbound \
+    --access Allow \
+    --protocol TCP \
+    --destination-port-ranges 6443 \
+    --source-address-prefixes "$callerIp"
+
 # Create a virtual network and default subnet, associated with the NSG.
 echo "Creating virtual network and subnet..."
 az network vnet create \
